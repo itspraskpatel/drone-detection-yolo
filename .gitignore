@@ -1,0 +1,8 @@
+/training_dataset/
+/results/
+/runs/
+/temp/
+/templates
+test
+convert_dataset.py
+.gitattributes

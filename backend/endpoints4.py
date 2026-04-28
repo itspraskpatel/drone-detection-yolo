@@ -54,7 +54,7 @@ app = FastAPI(
 # Production-ready CORS settings - adjust allowed_origins for your environment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000"],  # Restrict to your frontend's origin
+    allow_origins=["http://localhost:8000", "http://localhost:8080"],  # Restrict to your frontend's origin
     allow_credentials=True,
     allow_methods=["GET", "POST"],  # Restrict to needed methods
     allow_headers=["*"],
@@ -462,12 +462,23 @@ def video_writer(output_path, fps, width, height):
     """Context manager for video writer to ensure resources are released"""
     writer = None
     try:
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        writer = create_video_writer(output_path, fps, width, height)
         yield writer
     finally:
         if writer is not None:
             writer.release()
+
+def create_video_writer(output_path, fps, width, height):
+    """Create a video writer using a browser-friendly codec first."""
+    for codec in ('avc1', 'H264', 'mp4v'):
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        if writer.isOpened():
+            if codec != 'mp4v':
+                logger.info(f"Using {codec} codec for processed video output")
+            return writer
+
+    raise RuntimeError("Could not initialize video writer with any supported codec")
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request):
@@ -717,6 +728,14 @@ def process_video(video_path, output_path=None, max_frames=None, frame_skip=1, s
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps = cap.get(cv2.CAP_PROP_FPS)
+
+            # Some uploaded videos report 0 FPS, which produces an invalid MP4.
+            if not fps or fps <= 0:
+                fps = 30.0
+
+            if width <= 0 or height <= 0:
+                raise RuntimeError("Could not read valid video dimensions")
+
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             max_frames = max_frames if max_frames else (total_frames if total_frames > 0 else 300)
             
@@ -727,8 +746,7 @@ def process_video(video_path, output_path=None, max_frames=None, frame_skip=1, s
             
             writer = None
             if output_path:
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                writer = create_video_writer(output_path, fps, width, height)
             
             frame_count = 0
             processed_frames = 0
